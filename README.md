@@ -1,1 +1,1 @@
-# PracticalMachineLearningCoursera
+# Practical Machine Learning Coursera
