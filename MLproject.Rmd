@@ -1,0 +1,251 @@
+---
+title: "Practical Machine Learning - Course Project"
+author: "Krzysztof Kolmus"
+date: "9 June 2020"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+rm(list=ls()) 
+
+suppressPackageStartupMessages({
+  library(tidyverse)
+  library(caret)
+  library(corrplot)
+})
+
+dir <- "~/Desktop/Kursy/Machine learning/Practical Machine Learning"
+dir.create(dir, recursive = TRUE)
+setwd(dir)
+```
+
+
+## 1. Overview
+This is the final report of the Practical Machine Learning course within the Data Science Specialization from the Coursera platform. It was built up in RStudio, using its knitr functions, meant to be published in html format.
+The main goal of this project is to predict the manner in which six participants performed barbell lifts  correctly and incorrectly. More specifically, as stated at the [study website](http://groupware.les.inf.puc-rio.br/har) six young healthy participants were asked to perform one set of 10 repetitions of the Unilateral Dumbbell Biceps Curl in five different fashions: <br />
+  * exactly according to the specification (Class A), <br /> 
+  * throwing the elbows to the front (Class B), <br />
+  * lifting the dumbbell only halfway (Class C), <br />
+  * lowering the dumbbell only halfway (Class D), <br />
+  * and throwing the hips to the front (Class E). <br /> 
+Class A corresponds to the specified execution of the exercise, while the other 4 classes correspond to common mistakes. Participants were supervised by an experienced weight lifter to make sure the execution complied to the manner they were supposed to simulate. The exercises were performed by six male participants aged between 20-28 years, with little weight lifting experience. We made sure that all participants could easily simulate the mistakes in a safe and controlled manner by using a relatively light dumbbell (1.25kg)."
+
+
+## 2. Background (source: the Coursera website)
+Using devices such as Jawbone Up, Nike FuelBand, and Fitbit it is now possible to collect a large amount of data about personal activity relatively inexpensively. These type of devices are part of the quantified self movement - a group of enthusiasts who take measurements about themselves regularly to improve their health, to find patterns in their behavior, or because they are tech geeks. One thing that people regularly do is quantify how much of a particular activity they do, but they rarely quantify how well they do it. In this project, your goal will be to use data from accelerometers on the belt, forearm, arm, and dumbell of 6 participants. They were asked to perform barbell lifts correctly and incorrectly in 5 different ways. More information is available from the website [here](#http://groupware.les.inf.puc-rio.br/har) (see the section on the Weight Lifting Exercise Dataset).
+
+Read more: http://groupware.les.inf.puc-rio.br/har#ixzz3xsbS5bVX
+
+
+## 3. Exploratory Data Analysis
+###  a) Overview of datasets: <br />
+- [training data](https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv)  <br />
+- [test data](https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv)  <br />
+
+> Full source:
+Velloso, E.; Bulling, A.; Gellersen, H.; Ugulino, W.; Fuks, H. “Qualitative Activity Recognition of Weight Lifting Exercises. Proceedings of 4th International Conference in Cooperation with SIGCHI (Augmented Human ’13)”. Stuttgart, Germany: ACM SIGCHI, 2013.
+    
+###  b) Prepare and clean data <br />
+- download dataset  <br />
+- partition the training dataset into a *training set* (70% of the total training data) for the modeling process and a *test set* (with the remaining 30% of the total training data) for the assessment of the machine leaning model  <br />
+- the test dataset (hereafter called validation dataset) was left not altered  <br />
+  
+``` {r, echo = TRUE, comment = NA}
+# set the URL for the download
+TrainSetURL <- "http://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv"
+TestSetULR  <- "http://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv"
+
+# download the datasets
+Train <- read.csv(file = url(TrainSetURL))
+Validation  <- read.csv(file = url(TestSetULR))
+
+# change features to numeric, factor, character variables
+
+# create a partition with the training dataset 
+data.index <- createDataPartition(Train$classe, p = 0.7, list = FALSE)
+TrainSet <- Train[data.index, ]
+dim(TrainSet)
+TestSet  <- Train[-data.index, ]
+dim(TestSet)
+```
+
+Both training and test datasets have 160 features that could be used by machine learning algorithms. However, a vast majority of these features is not particulary useful as they represent NA values or are relatively stable. Therefore, these features will be discarded in the course of data cleaning process presented below.
+
+``` {r, comment=""}
+# remove weak predictors with Nearly Zero Variance
+NZV <- nearZeroVar(TrainSet)
+TrainSet <- TrainSet[, -NZV]
+ncol(TrainSet)
+TestSet  <- TestSet[, -NZV]
+ncol(TestSet)
+
+# remove predictors that are mostly NA
+AllNA <- sapply(TrainSet, function(x) mean(is.na(x))) > 0.95
+TrainSet <- TrainSet[, AllNA == FALSE]
+ncol(TrainSet)
+TestSet  <- TestSet[, AllNA == FALSE]
+ncol(TestSet)
+
+# remove identification only variables (columns 1 to 5)
+TrainSet <- TrainSet[, -(1:5)]
+ncol(TrainSet)
+TestSet  <- TestSet[, -(1:5)]
+ncol(TestSet)
+```
+
+The data cleaning process reduced number of features that will be used for the machine leaning algorithms to `r ncol(TrainSet)` in the training dataset.
+
+### c) Correlation Analysis <br />
+A correlation among variables is analysed before proceeding to the modeling procedures.
+
+``` {r, fig.height = 12, fig.width = 12, comment=""}
+corMatrix <- cor(TrainSet[, -ncol(TrainSet)])
+corrplot(
+  corr = corMatrix, 
+  method = "color",
+  type = "upper",
+  order = "alphabet",  
+  # title = "Figure showing correlation of variables in the training dataset",
+  tl.cex = 0.8, 
+  tl.col = "black")
+```
+
+*Figure. Plot showing correlation of variables in the training dataset.* The highly correlated variables are shown in dark colors in the graph above, whilst uncorrelated variables are depicted in white.
+
+
+## 4. Assembly of Prediction Models
+Three machine learning algorithms will be applied to model the regressions in the Train dataset and assess its performance in the Test dataset. The best performing model will be applied to the validation dataset. 
+The following machine learning algorithms were chosen: <br />
+- Random Forest (RF) <br />
+- Support Vector Machine (SVM) <br />
+- Generalized Boosted Model (GBM) <br />
+Each analysis is associated with a *confusion matrix* and *performance parameters* in order to visualize and quantify the accuracy of individual model, respectively.
+
+### a) Method: Random Forest
+#### Fit model on TrainSet
+``` {r, comment=""} 
+controlRF <- trainControl(
+  method = "cv", 
+  number = 5, 
+  summaryFunction = ,
+  verboseIter = FALSE)
+
+modelFitRF <- train(
+  classe ~ ., 
+  data = TrainSet, 
+  method = "rf",
+  trControl = controlRF)
+
+modelFitRF$finalModel
+```
+
+#### Prediction on TestSet
+``` {r, comment=""} 
+predictRF <- predict(
+  modelFitRF,
+  newdata = TestSet)
+
+confusionMatrixRF <- confusionMatrix(predictRF, TestSet$classe)
+confusionMatrixRF
+```
+
+#### Plot matrix results
+``` {r, comment=""}
+plot(
+  confusionMatrixRF$table, 
+  col = confusionMatrixRF$byClass, 
+  main = paste("Random Forest - Accuracy =",
+               round(confusionMatrixRF$overall['Accuracy'], 4)))
+```
+
+### b) Method: Support Vector Machine
+#### Fit model on TrainSet
+``` {r, comment=""}
+controlSVM <- trainControl(
+  method = "cv", 
+  number = 5, 
+  verboseIter = FALSE)
+
+modelFitSVM <- train(
+  classe ~ ., 
+  data = TrainSet, 
+  method = "svmRadial",
+  preProc = c("center","scale"),
+  trControl = controlRF)
+
+modelFitSVM$finalModel
+```
+
+#### Prediction on TestSet
+``` {r, comment=""}
+predictSVM <- predict(
+  modelFitSVM, 
+  newdata = TestSet, 
+  type = "raw")
+
+confusionMatatrixSVM <- confusionMatrix(predictSVM, TestSet$classe)
+confusionMatatrixSVM
+```
+
+#### Plot matrix results
+``` {r, comment=""}
+plot(
+  confusionMatatrixSVM$table, 
+  col = confusionMatatrixSVM$byClass, 
+  main = paste("Support Vector Machine - Accuracy =",
+               round(confusionMatatrixSVM$overall['Accuracy'], 4)))
+```
+
+### c) Method: Generalized Boosted Model
+#### Fit model on TrainSet
+``` {r, comment=""}
+controlGBM <- trainControl(
+  method = "repeatedcv", 
+  number = 5, 
+  repeats = 1)
+
+modelFitGBM  <- train(
+  classe ~ ., 
+  data=TrainSet, 
+  method = "gbm",
+  trControl = controlGBM, 
+  verbose = FALSE)
+
+modelFitGBM$finalModel
+```
+
+#### Prediction on TestSet
+``` {r, comment=""}
+predictGBM <- predict(
+  modelFitGBM, 
+  newdata = TestSet)
+
+confusionsMatrixGBM <- confusionMatrix(predictGBM, TestSet$classe)
+confusionsMatrixGBM
+```
+
+#### Plot matrix results
+``` {r, comment=""}
+plot(
+  confusionsMatrixGBM$table, 
+  col = confusionsMatrixGBM$byClass, 
+  main = paste("GBM - Accuracy =", 
+               round(confusionsMatrixGBM$overall['Accuracy'], 4)))
+```
+
+
+## 5. Applying the Selected Model to the Test Data
+The accuracy of the 3 regression modeling methods above are:
+
+  * Random Forest : 0.9983 
+  * SVM Radial : 0.9356
+  * GBM : 0.9841
+
+In the present analysis, the accuracy of the Random Forest model was the highest. Thus, this models will be applied to predict the 20 quiz results (validations dataset) as shown below.
+
+``` {r, comment=""}
+predictValidation <- predict(modelFitRF, newdata = Validation)
+predictValidation
+```
